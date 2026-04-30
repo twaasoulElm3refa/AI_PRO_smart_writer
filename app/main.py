@@ -59,63 +59,45 @@ async def create_conversation_endpoint(
     db: Session = Depends(get_db),
     _: None = Depends(verify_internal_api_key),
 ):
-    existing = get_conversation_by_uuid_for_user(db, req.conversation_uuid, req.user_id)
-    if existing:
+    try:
+        existing = get_conversation_by_uuid_for_user(db, req.conversation_uuid, req.user_id)
+        if existing:
+            return ConversationResponse(
+                id=existing.id,
+                user_id=existing.user_id,
+                sub_tool_id=existing.sub_tool_id,
+                uuid=existing.uuid,
+                is_pinned=bool(existing.is_pinned),
+                is_archived=bool(existing.is_archived),
+                created_at=existing.created_at.isoformat() if existing.created_at else None,
+                updated_at=existing.updated_at.isoformat() if existing.updated_at else None,
+            )
+
+        conv = create_conversation(
+            db=db,
+            user_id=req.user_id,
+            sub_tool_id=req.sub_tool_id,
+            conversation_uuid=req.conversation_uuid,
+            is_pinned=req.is_pinned,
+            is_archived=req.is_archived,
+        )
+        db.commit()
+        db.refresh(conv)
+
         return ConversationResponse(
-            id=existing.id,
-            user_id=existing.user_id,
-            sub_tool_id=existing.sub_tool_id,
-            uuid=existing.uuid,
-            is_pinned=bool(existing.is_pinned),
-            is_archived=bool(existing.is_archived),
-            created_at=existing.created_at.isoformat() if existing.created_at else None,
-            updated_at=existing.updated_at.isoformat() if existing.updated_at else None,
+            id=conv.id,
+            user_id=conv.user_id,
+            sub_tool_id=conv.sub_tool_id,
+            uuid=conv.uuid,
+            is_pinned=bool(conv.is_pinned),
+            is_archived=bool(conv.is_archived),
+            created_at=conv.created_at.isoformat() if conv.created_at else None,
+            updated_at=conv.updated_at.isoformat() if conv.updated_at else None,
         )
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(status_code=500, detail=repr(e))
 
-    conv = create_conversation(
-        db=db,
-        user_id=req.user_id,
-        sub_tool_id=req.sub_tool_id,
-        conversation_uuid=req.conversation_uuid,
-        is_pinned=req.is_pinned,
-        is_archived=req.is_archived,
-    )
-    db.commit()
-    db.refresh(conv)
-
-    return ConversationResponse(
-        id=conv.id,
-        user_id=conv.user_id,
-        sub_tool_id=conv.sub_tool_id,
-        uuid=conv.uuid,
-        is_pinned=bool(conv.is_pinned),
-        is_archived=bool(conv.is_archived),
-        created_at=conv.created_at.isoformat() if conv.created_at else None,
-        updated_at=conv.updated_at.isoformat() if conv.updated_at else None,
-    )
-
-
-@app.get("/users/{user_id}/conversations/{conversation_uuid}/messages", response_model=list[MessageResponse], tags=["messages"])
-async def list_conversation_messages_endpoint(
-    user_id: int,
-    conversation_uuid: str,
-    db: Session = Depends(get_db),
-    _: None = Depends(verify_internal_api_key),
-):
-    rows = list_conversations_for_user(db, user_id)
-    return [
-        ConversationResponse(
-            id=row.id,
-            user_id=row.user_id,
-            sub_tool_id=row.sub_tool_id,
-            uuid=row.uuid,
-            is_pinned=bool(row.is_pinned),
-            is_archived=bool(row.is_archived),
-            created_at=row.created_at.isoformat() if row.created_at else None,
-            updated_at=row.updated_at.isoformat() if row.updated_at else None,
-        )
-        for row in rows
-    ]
 
 
 @app.get("/users/{user_id}/conversations/{conversation_uuid}/messages", response_model=list[MessageResponse], tags=["messages"])
