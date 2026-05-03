@@ -5,15 +5,9 @@ from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy.orm import Session
 
 from app.settings import get_settings
-from app.crud import create_conversation, get_conversation_by_uuid_for_user, list_conversations_for_user, list_messages
+from app.crud import get_conversation_by_uuid_for_user, list_messages
 from app.database import get_db
-from app.schemas import (
-    TaskRequest,
-    TaskResponse,
-    ConversationCreateRequest,
-    ConversationResponse,
-    MessageResponse,
-)
+from app.schemas import TaskRequest, TaskResponse, MessageResponse
 from app.services import run_task
 from app.tasks import TASKS
 from app.security import verify_internal_api_key
@@ -22,9 +16,11 @@ settings = get_settings()
 
 app = FastAPI(title=settings.APP_NAME)
 
-origins = ["*"] if settings.ALLOWED_ORIGINS == "*" else [
-    origin.strip() for origin in settings.ALLOWED_ORIGINS.split(",") if origin.strip()
-]
+origins = (
+    ["*"]
+    if settings.ALLOWED_ORIGINS == "*"
+    else [origin.strip() for origin in settings.ALLOWED_ORIGINS.split(",") if origin.strip()]
+)
 
 app.add_middleware(
     CORSMiddleware,
@@ -50,58 +46,21 @@ async def health():
         "status": "ok",
         "app": settings.APP_NAME,
         "env": settings.APP_ENV,
+        "db_write_mode": "disabled_fastapi_read_only",
     }
 
 
-@app.post("/conversations", response_model=ConversationResponse, tags=["conversations"])
-async def create_conversation_endpoint(
-    req: ConversationCreateRequest,
+@app.get(
+    "/users/{user_id}/conversations/{conversation_uuid}/messages",
+    response_model=list[MessageResponse],
+    tags=["messages"],
+)
+async def list_conversation_messages_endpoint(
+    user_id: int,
+    conversation_uuid: str,
     db: Session = Depends(get_db),
     _: None = Depends(verify_internal_api_key),
 ):
-    try:
-        existing = get_conversation_by_uuid_for_user(db, req.conversation_uuid, req.user_id)
-        if existing:
-            return ConversationResponse(
-                id=existing.id,
-                user_id=existing.user_id,
-                sub_tool_id=existing.sub_tool_id,
-                uuid=existing.uuid,
-                is_pinned=bool(existing.is_pinned),
-                is_archived=bool(existing.is_archived),
-                created_at=existing.created_at.isoformat() if existing.created_at else None,
-                updated_at=existing.updated_at.isoformat() if existing.updated_at else None,
-            )
-
-        conv = create_conversation(
-            db=db,
-            user_id=req.user_id,
-            sub_tool_id=req.sub_tool_id,
-            conversation_uuid=req.conversation_uuid,
-            is_pinned=req.is_pinned,
-            is_archived=req.is_archived,
-        )
-        db.commit()
-        db.refresh(conv)
-
-        return ConversationResponse(
-            id=conv.id,
-            user_id=conv.user_id,
-            sub_tool_id=conv.sub_tool_id,
-            uuid=conv.uuid,
-            is_pinned=bool(conv.is_pinned),
-            is_archived=bool(conv.is_archived),
-            created_at=conv.created_at.isoformat() if conv.created_at else None,
-            updated_at=conv.updated_at.isoformat() if conv.updated_at else None,
-        )
-    except Exception as e:
-        db.rollback()
-        raise HTTPException(status_code=500, detail=repr(e))
-
-
-
-@app.get("/users/{user_id}/conversations/{conversation_uuid}/messages", response_model=list[MessageResponse], tags=["messages"])
-async def list_conversation_messages_endpoint(user_id: int, conversation_uuid: str, db: Session = Depends(get_db)):
     conv = get_conversation_by_uuid_for_user(db, conversation_uuid, user_id)
     if not conv:
         raise HTTPException(status_code=404, detail="Conversation not found")
@@ -130,13 +89,11 @@ def create_task_endpoint(task_key: str):
         try:
             return await run_task(db, task_key, req, request.state.request_id)
         except ValueError as e:
-            db.rollback()
             raise HTTPException(status_code=400, detail=str(e))
         except httpx.HTTPStatusError as e:
-            db.rollback()
-            raise HTTPException(status_code=502, detail=f"Provider HTTP error: {e.response.text}")
+            provider_text = e.response.text if e.response is not None else str(e)
+            raise HTTPException(status_code=502, detail=f"Provider HTTP error: {provider_text}")
         except Exception as e:
-            db.rollback()
             raise HTTPException(status_code=502, detail=str(e))
 
     return endpoint

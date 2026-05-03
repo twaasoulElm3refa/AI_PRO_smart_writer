@@ -2,7 +2,9 @@ from fastapi import Header, HTTPException
 from app.settings import get_settings
 
 
-async def verify_internal_api_key(x_internal_api_key: str | None = Header(default=None)) -> None:
+async def verify_internal_api_key(
+    x_internal_api_key: str | None = Header(default=None, alias="X-Internal-Api-Key")
+) -> None:
     settings = get_settings()
 
     if not settings.INTERNAL_API_KEY:

@@ -1,7 +1,7 @@
 from sqlalchemy.orm import Session
 
 from app.settings import get_settings
-from app.crud import ensure_conversation, save_message, touch_conversation
+from app.crud import get_existing_conversation_for_task
 from app.memory import load_recent_chat_messages
 from app.providers import send_messages_with_model
 from app.schemas import ChatMessage, TaskRequest, TaskResponse
@@ -48,7 +48,50 @@ def validate_request_limits(req: TaskRequest) -> None:
     settings = get_settings()
 
     if len(req.user_message) > settings.MAX_USER_MESSAGE_LENGTH:
-        raise ValueError(f"user_message exceeds max length of {settings.MAX_USER_MESSAGE_LENGTH}")
+        raise ValueError(
+            f"user_message exceeds max length of {settings.MAX_USER_MESSAGE_LENGTH}"
+        )
+
+    if req.task_options and req.task_options.history_limit is not None:
+        if req.task_options.history_limit < 0:
+            raise ValueError("history_limit cannot be negative")
+        if req.task_options.history_limit > settings.MAX_HISTORY_MESSAGES:
+            raise ValueError(
+                f"history_limit exceeds max value of {settings.MAX_HISTORY_MESSAGES}"
+            )
+
+
+def resolve_history_limit(task_key: str, req: TaskRequest) -> int:
+    task = TASKS[task_key]
+    settings = get_settings()
+
+    default_history_limit = int(
+        task.get("history_limit", settings.DEFAULT_HISTORY_LIMIT)
+    )
+
+    if req.task_options and req.task_options.history_limit is not None:
+        return int(req.task_options.history_limit)
+
+    return min(default_history_limit, settings.MAX_HISTORY_MESSAGES)
+
+
+def should_append_current_user_message(
+    history_messages: list[ChatMessage],
+    current_user_message: str,
+) -> bool:
+    """
+    If Laravel saves the user message before calling FastAPI, the latest DB message
+    may already be exactly the same user message. In that case, do not append it
+    again to the provider payload, otherwise the AI receives duplicated input.
+    """
+    if not history_messages:
+        return True
+
+    last = history_messages[-1]
+    return not (
+        last.role == "user"
+        and last.content.strip() == current_user_message.strip()
+    )
 
 
 def build_messages_for_task(
@@ -59,14 +102,7 @@ def build_messages_for_task(
     if task_key not in TASKS:
         raise ValueError(f"Unknown task_key: {task_key}")
 
-    task = TASKS[task_key]
-    default_history_limit = task.get("history_limit", 12)
-
-    history_limit = default_history_limit
-    if req.task_options and req.task_options.history_limit is not None:
-        history_limit = req.task_options.history_limit
-
-    conversation = ensure_conversation(
+    conversation = get_existing_conversation_for_task(
         db=db,
         user_id=req.user_id,
         sub_tool_id=req.sub_tool_id,
@@ -83,8 +119,18 @@ def build_messages_for_task(
         ChatMessage(role="system", content=final_system_prompt)
     ]
 
-    messages.extend(load_recent_chat_messages(db, conversation.id, history_limit))
-    messages.append(ChatMessage(role="user", content=req.user_message.strip()))
+    history_limit = resolve_history_limit(task_key, req)
+    history_messages = load_recent_chat_messages(
+        db=db,
+        conversation_id=conversation.id,
+        limit=history_limit,
+    )
+
+    messages.extend(history_messages)
+
+    clean_user_message = req.user_message.strip()
+    if should_append_current_user_message(history_messages, clean_user_message):
+        messages.append(ChatMessage(role="user", content=clean_user_message))
 
     return messages
 
@@ -105,7 +151,8 @@ async def run_task(
     task = TASKS[task_key]
     model_key = task["model_key"]
 
-    conversation = ensure_conversation(
+    # Read/validate only. No insert, no update, no commit.
+    get_existing_conversation_for_task(
         db=db,
         user_id=req.user_id,
         sub_tool_id=req.sub_tool_id,
@@ -117,14 +164,6 @@ async def run_task(
 
     messages = build_messages_for_task(db, task_key, req)
 
-    save_message(
-        db=db,
-        conversation_id=conversation.id,
-        role="user",
-        content=req.user_message.strip(),
-        is_error=False,
-    )
-
     reply = await send_messages_with_model(
         model_key=model_key,
         messages=messages,
@@ -132,23 +171,13 @@ async def run_task(
         max_tokens_override=max_tokens_override,
     )
 
-    save_message(
-        db=db,
-        conversation_id=conversation.id,
-        role="assistant",
-        content=reply,
-        is_error=False,
-    )
-
-    touch_conversation(db, conversation)
-    db.commit()
-
     debug = None
     if req.debug and settings.ENABLE_DEBUG_RESPONSE:
         debug = {
             "final_system_prompt": messages[0].content,
             "messages_sent": [m.model_dump() for m in messages],
             "client_metadata": req.client_metadata,
+            "db_write_mode": "disabled_fastapi_read_only",
         }
 
     return TaskResponse(

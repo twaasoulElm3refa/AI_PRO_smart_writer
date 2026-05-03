@@ -7,7 +7,7 @@ class Settings(BaseSettings):
     APP_NAME: str = "AI Tools API"
     APP_ENV: str = "production"
     APP_HOST: str = "0.0.0.0"
-    APP_PORT: int = 8000
+    APP_PORT: int = 9000
     ALLOWED_ORIGINS: str = "*"
 
     DATABASE_URL: str = Field(default="")
@@ -25,13 +25,13 @@ class Settings(BaseSettings):
     MAX_USER_MESSAGE_LENGTH: int = 12000
     MAX_HISTORY_MESSAGES: int = 20
 
-    OPENROUTER_WRITER_MODEL: str = "deepseek/deepseek-v3.2"
+    OPENROUTER_WRITER_MODEL: str = "nvidia/nemotron-3-super-120b-a12b:free"
     OPENROUTER_SUMMARIZER_MODEL: str = "deepseek/deepseek-v3.2"
     OPENROUTER_HEADLINE_MODEL: str = "deepseek/deepseek-v3.2"
     OPENROUTER_PARAPHRASER_MODEL: str = "deepseek/deepseek-v3.2"
 
     INTERNAL_API_KEY: str = Field(default="")
-    INTERNAL_API_HEADER_NAME: str = "test123"
+    INTERNAL_API_HEADER_NAME: str = "X-Internal-Api-Key"
 
     model_config = SettingsConfigDict(
         env_file=".env",
