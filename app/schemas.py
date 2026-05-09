@@ -1,8 +1,9 @@
-from typing import Any, Dict, List, Literal, Optional
-from pydantic import BaseModel, Field, field_validator
+from typing import Any, Dict, Literal, Optional
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 
 RoleType = Literal["system", "user", "assistant"]
+SearchMode = Literal["auto", "on", "off"]
 
 
 class ChatMessage(BaseModel):
@@ -22,6 +23,48 @@ class TaskOptions(BaseModel):
     temperature: Optional[float] = None
     max_tokens: Optional[int] = None
     history_limit: Optional[int] = None
+
+    # New: smart search control.
+    # auto = backend decides, on = force search, off = never search.
+    search_mode: SearchMode = "auto"
+
+    # Backward-compatible fields if your frontend already sends them.
+    enable_web_search: Optional[bool] = None
+    force_no_search: bool = False
+
+    web_search_max_results: Optional[int] = None
+    web_search_max_total_results: Optional[int] = None
+
+    @field_validator("temperature")
+    @classmethod
+    def validate_temperature(cls, v: Optional[float]) -> Optional[float]:
+        if v is None:
+            return v
+        if v < 0 or v > 2:
+            raise ValueError("temperature must be between 0 and 2")
+        return v
+
+    @field_validator("max_tokens")
+    @classmethod
+    def validate_max_tokens(cls, v: Optional[int]) -> Optional[int]:
+        if v is None:
+            return v
+        if v < 16:
+            raise ValueError("max_tokens must be at least 16")
+        if v > 12000:
+            raise ValueError("max_tokens is too high")
+        return v
+
+    @model_validator(mode="after")
+    def normalize_legacy_search_flags(self):
+        if self.force_no_search:
+            self.search_mode = "off"
+        elif self.enable_web_search is True:
+            self.search_mode = "on"
+        elif self.enable_web_search is False and self.search_mode == "auto":
+            # Keep auto when omitted. Only explicit False maps to off if frontend sends it.
+            self.search_mode = "off"
+        return self
 
 
 class TaskRequest(BaseModel):

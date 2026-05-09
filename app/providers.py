@@ -7,7 +7,12 @@ from app.tasks import MODEL_ROUTES
 
 
 def _clean_ascii_header(value: str) -> str:
-    return value.encode("ascii", "ignore").decode("ascii").strip()
+    cleaned = value.encode("ascii", "ignore").decode("ascii").strip()
+    return cleaned or "AI Tools API"
+
+
+def _clamp(value: int, minimum: int, maximum: int) -> int:
+    return max(minimum, min(maximum, int(value)))
 
 
 async def send_messages_with_model(
@@ -15,6 +20,9 @@ async def send_messages_with_model(
     messages: List[ChatMessage],
     temperature_override: Optional[float] = None,
     max_tokens_override: Optional[int] = None,
+    enable_web_search: bool = False,
+    web_search_max_results: Optional[int] = None,
+    web_search_max_total_results: Optional[int] = None,
 ) -> str:
     settings = get_settings()
 
@@ -36,28 +44,68 @@ async def send_messages_with_model(
     if not settings.OPENROUTER_API_KEY:
         raise ValueError("OPENROUTER_API_KEY is missing")
 
-    temperature = temperature_override if temperature_override is not None else route.get("temperature", settings.DEFAULT_TEMPERATURE)
-    max_tokens = max_tokens_override if max_tokens_override is not None else route.get("max_tokens", settings.DEFAULT_MAX_TOKENS)
+    temperature = (
+        float(temperature_override)
+        if temperature_override is not None
+        else float(route.get("temperature", settings.DEFAULT_TEMPERATURE))
+    )
 
-    url = f"{settings.OPENROUTER_BASE_URL}/chat/completions"
+    max_tokens = (
+        int(max_tokens_override)
+        if max_tokens_override is not None
+        else int(route.get("max_tokens", settings.DEFAULT_MAX_TOKENS))
+    )
+
+    url = f"{settings.OPENROUTER_BASE_URL.rstrip('/')}/chat/completions"
 
     payload = {
         "model": model_name,
         "messages": [msg.model_dump() for msg in messages],
         "temperature": temperature,
-        "max_tokens": max_tokens,
+        # OpenRouter supports max_completion_tokens and max_tokens. Use max_completion_tokens for newer models.
+        "max_completion_tokens": max_tokens,
     }
+
+    if enable_web_search:
+        max_results = _clamp(
+            web_search_max_results or settings.WEB_SEARCH_DEFAULT_MAX_RESULTS,
+            1,
+            settings.WEB_SEARCH_HARD_MAX_RESULTS,
+        )
+        max_total_results = _clamp(
+            web_search_max_total_results or settings.WEB_SEARCH_DEFAULT_MAX_TOTAL_RESULTS,
+            max_results,
+            settings.WEB_SEARCH_HARD_MAX_TOTAL_RESULTS,
+        )
+
+        payload["tools"] = [
+            {
+                "type": "openrouter:web_search",
+                "parameters": {
+                    "max_results": max_results,
+                    "max_total_results": max_total_results,
+                    "search_context_size": "medium",
+                },
+            }
+        ]
 
     headers = {
         "Authorization": f"Bearer {settings.OPENROUTER_API_KEY}".strip(),
         "Content-Type": "application/json",
-        "HTTP-Referer": "http://localhost",
+        "HTTP-Referer": settings.SITE_URL,
         "X-Title": _clean_ascii_header(settings.APP_NAME),
     }
 
     async with httpx.AsyncClient(timeout=settings.REQUEST_TIMEOUT_SECONDS) as client:
         response = await client.post(url, json=payload, headers=headers)
-        response.raise_for_status()
+        try:
+            response.raise_for_status()
+        except httpx.HTTPStatusError as exc:
+            detail = exc.response.text if exc.response is not None else str(exc)
+            raise ValueError(f"OpenRouter error: {detail}") from exc
         data = response.json()
 
-    return data["choices"][0]["message"]["content"].strip()
+    try:
+        return data["choices"][0]["message"]["content"].strip()
+    except Exception as exc:
+        raise ValueError(f"Unexpected OpenRouter response: {data}") from exc
