@@ -1,9 +1,20 @@
-from typing import List, Optional
+from typing import Any, Dict, List, Optional
+from dataclasses import dataclass
+
 import httpx
 
 from app.settings import get_settings
 from app.schemas import ChatMessage
 from app.tasks import MODEL_ROUTES
+
+
+@dataclass
+class ProviderResult:
+    content: str
+    input_tokens: Optional[int] = None
+    output_tokens: Optional[int] = None
+    total_tokens: Optional[int] = None
+    raw_usage: Optional[dict] = None
 
 
 def _clean_ascii_header(value: str) -> str:
@@ -23,7 +34,8 @@ async def send_messages_with_model(
     enable_web_search: bool = False,
     web_search_max_results: Optional[int] = None,
     web_search_max_total_results: Optional[int] = None,
-) -> str:
+    response_format: Optional[Dict[str, Any]] = None,
+) -> ProviderResult:
     settings = get_settings()
 
     if model_key not in MODEL_ROUTES:
@@ -58,13 +70,16 @@ async def send_messages_with_model(
 
     url = f"{settings.OPENROUTER_BASE_URL.rstrip('/')}/chat/completions"
 
-    payload = {
+    payload: Dict[str, Any] = {
         "model": model_name,
         "messages": [msg.model_dump() for msg in messages],
         "temperature": temperature,
-        # OpenRouter supports max_completion_tokens and max_tokens. Use max_completion_tokens for newer models.
         "max_completion_tokens": max_tokens,
     }
+
+    # Important for extractor: force JSON object when supported by the selected model/provider.
+    if response_format is not None:
+        payload["response_format"] = response_format
 
     if enable_web_search:
         max_results = _clamp(
@@ -106,6 +121,22 @@ async def send_messages_with_model(
         data = response.json()
 
     try:
-        return data["choices"][0]["message"]["content"].strip()
+        content = (data["choices"][0]["message"].get("content") or "").strip()
+        usage = data.get("usage") or {}
+
+        input_tokens = usage.get("prompt_tokens") or usage.get("input_tokens")
+        output_tokens = usage.get("completion_tokens") or usage.get("output_tokens")
+        total_tokens = usage.get("total_tokens")
+
+        if total_tokens is None and input_tokens is not None and output_tokens is not None:
+            total_tokens = input_tokens + output_tokens
+
+        return ProviderResult(
+            content=content,
+            input_tokens=input_tokens,
+            output_tokens=output_tokens,
+            total_tokens=total_tokens,
+            raw_usage=usage,
+        )
     except Exception as exc:
         raise ValueError(f"Unexpected OpenRouter response: {data}") from exc

@@ -1,4 +1,4 @@
-from typing import Any, Dict, Literal, Optional
+from typing import Any, Dict, List, Literal, Optional
 from pydantic import BaseModel, Field, field_validator, model_validator
 
 
@@ -19,16 +19,26 @@ class ChatMessage(BaseModel):
         return v
 
 
+class TokenUsage(BaseModel):
+    input_tokens: Optional[int] = None
+    output_tokens: Optional[int] = None
+    total_tokens: Optional[int] = None
+
+
+class CostUsage(BaseModel):
+    input_cost: Optional[float] = None
+    output_cost: Optional[float] = None
+    web_search_cost: Optional[float] = None
+    total_cost: Optional[float] = None
+    currency: str = "USD"
+
+
 class TaskOptions(BaseModel):
     temperature: Optional[float] = None
     max_tokens: Optional[int] = None
     history_limit: Optional[int] = None
 
-    # New: smart search control.
-    # auto = backend decides, on = force search, off = never search.
     search_mode: SearchMode = "auto"
-
-    # Backward-compatible fields if your frontend already sends them.
     enable_web_search: Optional[bool] = None
     force_no_search: bool = False
 
@@ -62,7 +72,6 @@ class TaskOptions(BaseModel):
         elif self.enable_web_search is True:
             self.search_mode = "on"
         elif self.enable_web_search is False and self.search_mode == "auto":
-            # Keep auto when omitted. Only explicit False maps to off if frontend sends it.
             self.search_mode = "off"
         return self
 
@@ -104,6 +113,151 @@ class TaskResponse(BaseModel):
     conversation_uuid: str
     request_id: str
     debug: Optional[dict] = None
+    usage: Optional[TokenUsage] = None
+    cost: Optional[CostUsage] = None
+
+
+HeadlineContentType = Literal[
+    "Article",
+    "News",
+    "YouTube Video",
+    "Social Media Post",
+    "Ad",
+    "Email Subject",
+    "Landing Page",
+    "Product",
+    "Report",
+    "Creative Text",
+    "General",
+]
+
+HeadlineGoal = Literal[
+    "Attract Attention",
+    "Explain Clearly",
+    "Increase Clicks",
+    "Sound Professional",
+    "Sound Creative",
+    "Improve SEO",
+    "Create Curiosity",
+    "Sell / Convert",
+    "Summarize Content",
+]
+
+HeadlineLanguage = Literal[
+    "Auto Detect",
+    "Arabic",
+    "English",
+    "French",
+    "Chinese",
+    "Russian",
+]
+
+HeadlineTone = Literal[
+    "Professional",
+    "Powerful",
+    "Simple",
+    "Creative",
+    "Emotional",
+    "Luxury",
+    "Bold",
+    "Informative",
+    "Journalistic",
+    "Academic",
+    "Marketing",
+    "Neutral",
+]
+
+HeadlineLength = Literal[
+    "Short",
+    "Medium",
+    "Long",
+    "Auto",
+]
+
+HeadlineChatType = Literal[
+    "question",
+    "result",
+]
+
+
+class HeadlineState(BaseModel):
+    content: Optional[str] = None
+    content_type: Optional[HeadlineContentType] = None
+    goal: Optional[HeadlineGoal] = None
+    language: Optional[HeadlineLanguage] = None
+    tone: Optional[HeadlineTone] = None
+    number_of_headlines: Optional[int] = None
+    headline_length: Optional[HeadlineLength] = None
+    extra_options: List[str] = Field(default_factory=list)
+
+    @field_validator("content")
+    @classmethod
+    def validate_content(cls, v: Optional[str]) -> Optional[str]:
+        if v is None:
+            return v
+        v = str(v).strip()
+        return v or None
+
+    @field_validator("number_of_headlines")
+    @classmethod
+    def validate_number_of_headlines(cls, v: Optional[int]) -> Optional[int]:
+        if v is None:
+            return v
+        allowed = {5, 10, 15, 20}
+        if int(v) not in allowed:
+            raise ValueError("number_of_headlines must be one of 5, 10, 15, 20")
+        return int(v)
+
+
+class HeadlineChatRequest(BaseModel):
+    user_id: int
+    sub_tool_id: int
+    conversation_uuid: str
+    user_message: str
+    state: Optional[HeadlineState] = None
+    debug: bool = False
+    client_metadata: Dict[str, Any] = Field(default_factory=dict)
+
+    @field_validator("conversation_uuid")
+    @classmethod
+    def validate_uuid(cls, v: str) -> str:
+        v = v.strip()
+        if not v:
+            raise ValueError("conversation_uuid cannot be empty")
+        return v
+
+    @field_validator("user_message")
+    @classmethod
+    def validate_user_message(cls, v: str) -> str:
+        v = v.strip()
+        if not v:
+            raise ValueError("user_message cannot be empty")
+        return v
+
+
+class HeadlineItem(BaseModel):
+    id: int
+    text: str
+    subheadline: Optional[str] = None
+
+
+class HeadlineChatResponse(BaseModel):
+    success: bool = True
+    type: HeadlineChatType
+    tool: str = "ai_headline_generator"
+    provider: str = "openrouter"
+    model_key: str = "headline_fast"
+    user_id: int
+    sub_tool_id: int
+    conversation_uuid: str
+    message: str
+    state: HeadlineState
+    headlines: List[HeadlineItem] = Field(default_factory=list)
+    count: int = 0
+    request_id: str
+    debug: Optional[dict] = None
+    usage: Optional[TokenUsage] = None
+    cost: Optional[CostUsage] = None
 
 
 class ConversationCreateRequest(BaseModel):

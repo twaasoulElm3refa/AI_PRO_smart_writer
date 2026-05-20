@@ -4,7 +4,7 @@ from app.settings import get_settings
 from app.crud import get_existing_conversation_for_task
 from app.memory import load_recent_chat_messages
 from app.providers import send_messages_with_model
-from app.schemas import ChatMessage, TaskRequest, TaskResponse
+from app.schemas import ChatMessage, TaskRequest, TaskResponse, CostUsage
 from app.tasks import BASE_SYSTEM_PROMPT, TASKS
 from app.intelligence import (
     resolve_search_enabled,
@@ -123,11 +123,49 @@ def build_messages_for_task(
     messages.extend(history_messages)
 
     clean_user_message = req.user_message.strip()
-    if should_append_current_user_message(history_messages, clean_user_message):
-        messages.append(ChatMessage(role="user", content=clean_user_message))
+
+    current_user_message = f"""
+    Current user request:
+    {clean_user_message}
+    
+    Important:
+    Answer the current request above. Use previous conversation only if it is directly relevant.
+    """.strip()
+
+    if should_append_current_user_message(history_messages, current_user_message):
+        messages.append(ChatMessage(role="user", content=current_user_message))
 
     return messages
 
+
+def calculate_cost(
+    input_tokens: int | None,
+    output_tokens: int | None,
+    enable_web_search: bool,
+    web_search_max_results: int | None,
+) -> dict:
+    settings = get_settings()
+
+    input_tokens = input_tokens or 0
+    output_tokens = output_tokens or 0
+
+    input_cost = (input_tokens / 1_000_000) * settings.WRITER_INPUT_COST_PER_1M
+    output_cost = (output_tokens / 1_000_000) * settings.WRITER_OUTPUT_COST_PER_1M
+
+    web_search_cost = 0.0
+    if enable_web_search:
+        search_results = web_search_max_results or settings.WEB_SEARCH_DEFAULT_MAX_RESULTS
+        web_search_cost = (search_results / 1000) * settings.WEB_SEARCH_COST_PER_1000_RESULTS
+
+    total_cost = input_cost + output_cost + web_search_cost
+
+    return {
+        "input_cost": round(input_cost, 8),
+        "output_cost": round(output_cost, 8),
+        "web_search_cost": round(web_search_cost, 8),
+        "total_cost": round(total_cost, 8),
+        "currency": "USD",
+    }
 
 async def run_task(db: Session, task_key: str, req: TaskRequest, request_id: str) -> TaskResponse:
     settings = get_settings()
@@ -169,7 +207,7 @@ async def run_task(db: Session, task_key: str, req: TaskRequest, request_id: str
         search_reason=analysis.reason,
     )
 
-    reply = await send_messages_with_model(
+    provider_result = await send_messages_with_model(
         model_key=model_key,
         messages=messages,
         temperature_override=temperature_override,
@@ -178,6 +216,7 @@ async def run_task(db: Session, task_key: str, req: TaskRequest, request_id: str
         web_search_max_results=web_search_max_results,
         web_search_max_total_results=web_search_max_total_results,
     )
+    reply = provider_result.content
 
     debug = None
     if req.debug and settings.ENABLE_DEBUG_RESPONSE:
@@ -204,13 +243,26 @@ async def run_task(db: Session, task_key: str, req: TaskRequest, request_id: str
             "db_write_mode": "disabled_fastapi_read_only",
         }
 
+    cost = calculate_cost(
+        input_tokens=provider_result.input_tokens,
+        output_tokens=provider_result.output_tokens,
+        enable_web_search=enable_web_search,
+        web_search_max_results=web_search_max_results,
+    )
+    
     return TaskResponse(
-        reply=reply,
         task_key=task_key,
         model_key=model_key,
         user_id=req.user_id,
         sub_tool_id=req.sub_tool_id,
         conversation_uuid=req.conversation_uuid,
+        reply=reply,
         request_id=request_id,
         debug=debug,
+        usage={
+            "input_tokens": provider_result.input_tokens,
+            "output_tokens": provider_result.output_tokens,
+            "total_tokens": provider_result.total_tokens,
+        },
+        cost=cost,
     )
