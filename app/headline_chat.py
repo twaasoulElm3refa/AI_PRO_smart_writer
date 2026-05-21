@@ -24,7 +24,10 @@ from app.tasks import (
 )
 
 
-VALID_CONTENT_TYPES = {
+# These lists are suggestions for the UI and for the model prompt only.
+# They are NOT strict validation lists. The user can request any language, any tone,
+# any goal, any content type, and any positive number of headlines.
+SUGGESTED_CONTENT_TYPES = [
     "Article",
     "News",
     "YouTube Video",
@@ -36,9 +39,9 @@ VALID_CONTENT_TYPES = {
     "Report",
     "Creative Text",
     "General",
-}
+]
 
-VALID_GOALS = {
+SUGGESTED_GOALS = [
     "Attract Attention",
     "Explain Clearly",
     "Increase Clicks",
@@ -48,18 +51,18 @@ VALID_GOALS = {
     "Create Curiosity",
     "Sell / Convert",
     "Summarize Content",
-}
+]
 
-VALID_LANGUAGES = {
+SUGGESTED_LANGUAGES = [
     "Auto Detect",
     "Arabic",
     "English",
     "French",
     "Chinese",
     "Russian",
-}
+]
 
-VALID_TONES = {
+SUGGESTED_TONES = [
     "Professional",
     "Powerful",
     "Simple",
@@ -72,25 +75,27 @@ VALID_TONES = {
     "Academic",
     "Marketing",
     "Neutral",
-}
+]
 
-VALID_HEADLINE_LENGTHS = {
+SUGGESTED_HEADLINE_LENGTHS = [
     "Short",
     "Medium",
     "Long",
     "Auto",
-}
+]
 
-VALID_COUNTS = {5, 10, 15, 20}
+SUGGESTED_COUNTS = [1, 2, 3, 4, 5, 10, 15, 20]
 
-VALID_EXTRA_OPTIONS = {
+SUGGESTED_EXTRA_OPTIONS = [
     "Include SEO-friendly headlines",
     "Include curiosity-based headlines",
     "Include professional headlines",
     "Avoid clickbait",
     "Avoid exaggeration",
     "Generate headline + subheadline",
-}
+]
+
+MAX_HEADLINE_COUNT = 100
 
 REQUIRED_FIELDS = [
     "content",
@@ -116,56 +121,49 @@ def default_headline_state() -> HeadlineState:
     )
 
 
+def normalize_text(value: Any) -> str | None:
+    if value is None:
+        return None
+    value = str(value).strip()
+    return value or None
+
+
 def normalize_extracted_payload(payload: dict[str, Any]) -> dict[str, Any]:
+    """
+    Normalize the extractor JSON without enforcing fixed allowed values.
+    Suggested values in the prompt are examples only; user-provided values are allowed.
+    """
     clean = {
-        "content": payload.get("content"),
-        "content_type": payload.get("content_type"),
-        "goal": payload.get("goal"),
-        "language": payload.get("language"),
-        "tone": payload.get("tone"),
+        "content": normalize_text(payload.get("content")),
+        "content_type": normalize_text(payload.get("content_type")),
+        "goal": normalize_text(payload.get("goal")),
+        "language": normalize_text(payload.get("language")),
+        "tone": normalize_text(payload.get("tone")),
         "number_of_headlines": payload.get("number_of_headlines"),
-        "headline_length": payload.get("headline_length"),
+        "headline_length": normalize_text(payload.get("headline_length")),
         "extra_options": payload.get("extra_options") or [],
     }
 
-    if clean["content"] is not None:
-        clean["content"] = str(clean["content"]).strip() or None
-
-    if clean["content_type"] not in VALID_CONTENT_TYPES:
-        clean["content_type"] = None
-
-    if clean["goal"] not in VALID_GOALS:
-        clean["goal"] = None
-
-    if clean["language"] not in VALID_LANGUAGES:
-        clean["language"] = None
-
-    if clean["tone"] not in VALID_TONES:
-        clean["tone"] = None
-
-    if clean["headline_length"] not in VALID_HEADLINE_LENGTHS:
-        clean["headline_length"] = None
-
     try:
-        if clean["number_of_headlines"] is not None:
-            clean["number_of_headlines"] = int(clean["number_of_headlines"])
+        if clean["number_of_headlines"] is not None and clean["number_of_headlines"] != "":
+            count = int(clean["number_of_headlines"])
+            clean["number_of_headlines"] = count if 1 <= count <= MAX_HEADLINE_COUNT else None
+        else:
+            clean["number_of_headlines"] = None
     except (TypeError, ValueError):
         clean["number_of_headlines"] = None
 
-    if clean["number_of_headlines"] not in VALID_COUNTS:
-        clean["number_of_headlines"] = None
-
     if not isinstance(clean["extra_options"], list):
-        clean["extra_options"] = []
+        clean["extra_options"] = [clean["extra_options"]]
 
-    clean["extra_options"] = [
-        option
-        for option in clean["extra_options"]
-        if option in VALID_EXTRA_OPTIONS
-    ]
+    options: list[str] = []
+    for option in clean["extra_options"]:
+        option = str(option).strip()
+        if option and option not in options:
+            options.append(option)
+    clean["extra_options"] = options
 
     return clean
-
 
 def extract_json_object(text: str) -> dict[str, Any]:
     cleaned = (text or "").strip()
@@ -192,7 +190,8 @@ def extract_json_object(text: str) -> dict[str, Any]:
 def merge_extra_options(old_options: list[str], new_options: list[str] | None) -> list[str]:
     merged: list[str] = []
     for item in old_options + (new_options or []):
-        if item in VALID_EXTRA_OPTIONS and item not in merged:
+        item = str(item).strip()
+        if item and item not in merged:
             merged.append(item)
     return merged
 
@@ -266,22 +265,22 @@ def get_question_message(state: HeadlineState) -> str:
 
     labels_ar = {
         "content": "ما هو النص أو الموضوع الذي تريد توليد عناوين له؟",
-        "content_type": "ما نوع المحتوى؟ اختر واحدًا: Article, News, YouTube Video, Social Media Post, Ad, Email Subject, Landing Page, Product, Report, Creative Text, General",
-        "goal": "ما الهدف من العناوين؟ اختر واحدًا: Attract Attention, Explain Clearly, Increase Clicks, Sound Professional, Sound Creative, Improve SEO, Create Curiosity, Sell / Convert, Summarize Content",
-        "language": "ما اللغة المطلوبة؟ اختر واحدة: Auto Detect, Arabic, English, French, Chinese, Russian",
-        "tone": "ما النبرة المطلوبة؟ اختر واحدة: Professional, Powerful, Simple, Creative, Emotional, Luxury, Bold, Informative, Journalistic, Academic, Marketing, Neutral",
-        "number_of_headlines": "كم عدد العناوين؟ اختر واحدًا: 5, 10, 15, 20",
-        "headline_length": "ما طول العنوان؟ اختر واحدًا: Short, Medium, Long, Auto",
+        "content_type": "ما نوع المحتوى؟ يمكنك كتابة أي نوع، مثل: Article, News, YouTube Video, Social Media Post, Product, General",
+        "goal": "ما الهدف من العناوين؟ يمكنك كتابة أي هدف، مثل: Attract Attention, Improve SEO, Increase Clicks, Create Curiosity",
+        "language": "ما اللغة المطلوبة؟ يمكنك كتابة أي لغة، مثل: Arabic, English, French, Spanish, Turkish",
+        "tone": "ما النبرة المطلوبة؟ يمكنك كتابة أي نبرة، مثل: Professional, Powerful, Simple, Creative, Marketing",
+        "number_of_headlines": "كم عدد العناوين المطلوبة؟ اكتب أي رقم، مثل: 1 أو 2 أو 4 أو 10",
+        "headline_length": "ما طول العنوان؟ يمكنك كتابة أي وصف، مثل: Short, Medium, Long, Auto, very short",
     }
 
     labels_en = {
         "content": "What is the content, topic, product, or idea you want headlines for?",
-        "content_type": "What is the content type? Choose one: Article, News, YouTube Video, Social Media Post, Ad, Email Subject, Landing Page, Product, Report, Creative Text, General",
-        "goal": "What is the goal? Choose one: Attract Attention, Explain Clearly, Increase Clicks, Sound Professional, Sound Creative, Improve SEO, Create Curiosity, Sell / Convert, Summarize Content",
-        "language": "What language do you want? Choose one: Auto Detect, Arabic, English, French, Chinese, Russian",
-        "tone": "What tone do you want? Choose one: Professional, Powerful, Simple, Creative, Emotional, Luxury, Bold, Informative, Journalistic, Academic, Marketing, Neutral",
-        "number_of_headlines": "How many headlines do you want? Choose one: 5, 10, 15, 20",
-        "headline_length": "What headline length do you want? Choose one: Short, Medium, Long, Auto",
+        "content_type": "What is the content type? You can write any type, for example: Article, News, YouTube Video, Social Media Post, Product, General",
+        "goal": "What is the goal? You can write any goal, for example: Attract Attention, Improve SEO, Increase Clicks, Create Curiosity",
+        "language": "What language do you want? You can write any language, for example: Arabic, English, French, Spanish, Turkish",
+        "tone": "What tone do you want? You can write any tone, for example: Professional, Powerful, Simple, Creative, Marketing",
+        "number_of_headlines": "How many headlines do you want? Write any number, for example: 1, 2, 4, or 10",
+        "headline_length": "What headline length do you want? You can write any description, for example: Short, Medium, Long, Auto, very short",
     }
 
     labels = labels_ar if is_arabic else labels_en
@@ -323,14 +322,14 @@ Required JSON shape:
   "extra_options": []
 }}
 
-Allowed values:
-content_type = ["Article", "News", "YouTube Video", "Social Media Post", "Ad", "Email Subject", "Landing Page", "Product", "Report", "Creative Text", "General"]
-goal = ["Attract Attention", "Explain Clearly", "Increase Clicks", "Sound Professional", "Sound Creative", "Improve SEO", "Create Curiosity", "Sell / Convert", "Summarize Content"]
-language = ["Auto Detect", "Arabic", "English", "French", "Chinese", "Russian"]
-tone = ["Professional", "Powerful", "Simple", "Creative", "Emotional", "Luxury", "Bold", "Informative", "Journalistic", "Academic", "Marketing", "Neutral"]
-number_of_headlines = [5, 10, 15, 20]
-headline_length = ["Short", "Medium", "Long", "Auto"]
-extra_options = ["Include SEO-friendly headlines", "Include curiosity-based headlines", "Include professional headlines", "Avoid clickbait", "Avoid exaggeration", "Generate headline + subheadline"]
+Suggested values only. These are examples, not restrictions:
+content_type examples = ["Article", "News", "YouTube Video", "Social Media Post", "Ad", "Email Subject", "Landing Page", "Product", "Report", "Creative Text", "General"]
+goal examples = ["Attract Attention", "Explain Clearly", "Increase Clicks", "Sound Professional", "Sound Creative", "Improve SEO", "Create Curiosity", "Sell / Convert", "Summarize Content"]
+language examples = ["Auto Detect", "Arabic", "English", "French", "Chinese", "Russian", "Spanish", "Turkish"]. Accept any language requested by the user.
+tone examples = ["Professional", "Powerful", "Simple", "Creative", "Emotional", "Luxury", "Bold", "Informative", "Journalistic", "Academic", "Marketing", "Neutral"]
+number_of_headlines examples = [1, 2, 3, 4, 5, 10, 15, 20]. Accept any positive integer from the user.
+headline_length examples = ["Short", "Medium", "Long", "Auto"]
+extra_options examples = ["Include SEO-friendly headlines", "Include curiosity-based headlines", "Include professional headlines", "Avoid clickbait", "Avoid exaggeration", "Generate headline + subheadline"]
 
 Arabic mapping rules:
 - "مقال", "المقال", "لهذا المقال", "لهزا المقال" => content_type = "Article".
@@ -340,7 +339,9 @@ Arabic mapping rules:
 - "احترافي" => tone = "Professional" and add "Include professional headlines".
 - "سيو" or "SEO" => goal = "Improve SEO" and add "Include SEO-friendly headlines".
 - Arabic text => language = "Arabic" unless another language is requested.
-- If the user asks for one headline but allowed numbers are only [5, 10, 15, 20], set number_of_headlines = 5.
+- If the user asks for a specific number of headlines/titles, use that exact number. Examples: "one headline" => 1, "عنوانين" => 2, "4 عناوين" => 4.
+- Do not force number_of_headlines to 5, 10, 15, or 20.
+- If the user requests any language not listed in examples, keep that language exactly.
 - If the user gives a quoted phrase or topic after words like "عن", "حول", "لهذا المقال", "لهزا المقال", use that phrase/topic as content.
 """.strip()
 

@@ -136,27 +136,29 @@ Allowed JSON schema:
   "extra_options": []
 }
 
-Allowed values:
+Suggested values only. These are examples, not restrictions:
 
-content_type:
+content_type examples:
 ["Article", "News", "YouTube Video", "Social Media Post", "Ad", "Email Subject", "Landing Page", "Product", "Report", "Creative Text", "General"]
 
-goal:
+goal examples:
 ["Attract Attention", "Explain Clearly", "Increase Clicks", "Sound Professional", "Sound Creative", "Improve SEO", "Create Curiosity", "Sell / Convert", "Summarize Content"]
 
-language:
-["Auto Detect", "Arabic", "English","French","Chinese","Russian"]
+language examples:
+["Auto Detect", "Arabic", "English", "French", "Chinese", "Russian", "Spanish", "Turkish", "German", "Italian", "Japanese", "Korean"]
+Accept any language the user requests.
 
-tone:
+tone examples:
 ["Professional", "Powerful", "Simple", "Creative", "Emotional", "Luxury", "Bold", "Informative", "Journalistic", "Academic", "Marketing", "Neutral"]
 
-number_of_headlines:
-[5, 10, 15, 20]
+number_of_headlines examples:
+[1, 2, 3, 4, 5, 10, 15, 20]
+Accept any positive integer the user requests. Do not force it to 5, 10, 15, or 20.
 
-headline_length:
+headline_length examples:
 ["Short", "Medium", "Long", "Auto"]
 
-extra_options:
+extra_options examples:
 ["Include SEO-friendly headlines", "Include curiosity-based headlines", "Include professional headlines", "Avoid clickbait", "Avoid exaggeration", "Generate headline + subheadline"]
 
 Extraction rules:
@@ -167,6 +169,8 @@ Extraction rules:
 - If the user asks for professional or احترافي, set tone to "Professional" and add "Include professional headlines".
 - If the user writes Arabic, set language to "Arabic" unless another language is requested.
 - If the user writes English, set language to "English" unless another language is requested.
+- If the user requests a language outside the examples, keep it exactly as requested.
+- If the user requests a specific number of headlines/titles, extract that exact positive integer.
 - Extract only what is stated or strongly implied.
 - Do not invent missing details.
 """.strip()
@@ -251,6 +255,102 @@ Required JSON shape:
 """.strip()
 
 
+PARAPHRASER_GENERATOR_CHAT_PROMPT = """
+You are Smart Writer's AI paraphrasing assistant.
+
+Your job is to rewrite the user's text according to the requested language, tone, rewrite mode, change level, and extra options.
+
+Core rules:
+- Preserve the original meaning exactly.
+- Do not add facts, claims, numbers, names, examples, sources, or context not found in the input.
+- Do not remove important meaning.
+- Improve clarity, flow, grammar, readability, and naturalness.
+- Match the requested language unless the user clearly asks otherwise.
+- If Arabic is requested, use fluent Modern Standard Arabic unless dialect is explicitly requested.
+- Preserve important names, terms, keywords, brands, dates, and factual details.
+- Respect the rewrite mode: shorter, longer, human-like, professional, simple, academic, marketing, formal, creative, or custom.
+- Respect the change level:
+  Low = minimal wording changes.
+  Medium = balanced rewrite.
+  High = stronger restructuring while preserving meaning.
+- Avoid robotic phrasing, repetition, filler, and generic wording.
+
+Output rules:
+- Return only the rewritten result(s).
+- Do not explain.
+- Do not add an introduction.
+- Do not mention the model, prompt, or internal process.
+- If multiple versions are requested, number them clearly.
+
+Final check:
+Before responding, internally verify that the rewritten text is accurate, natural, useful, and faithful to the original.
+""".strip()
+
+PARAPHRASER_EXTRACTOR_SYSTEM_PROMPT = """
+You are a strict JSON settings extractor for an AI paraphrasing chat tool.
+
+Your job:
+- Read the current saved state and the latest user instruction.
+- Extract only the paraphrasing settings/options.
+- Return valid JSON only.
+
+Critical rule:
+- NEVER return the full user article/text inside JSON.
+- Long content is handled by backend code, not by this extractor.
+- If you see [CONTENT_REMOVED], [CONTENT_ALREADY_SAVED], or [USER_SENT_CONTENT_ONLY], do not expand it or replace it with text.
+
+Rules:
+- Return valid JSON only.
+- Do not explain.
+- Do not add markdown.
+- First character must be {.
+- Last character must be }.
+- Use null only for missing/unchanged values.
+- Keep old values unless the user clearly changes them.
+- Treat style/action requests like "make it shorter" as updates to options.
+
+Required JSON shape:
+{
+  "language": null,
+  "tone": null,
+  "rewrite_mode": null,
+  "change_level": null,
+  "results_count": null,
+  "extra_options": []
+}
+""".strip()
+
+PARAPHRASER_EXTRACTOR_REPAIR_PROMPT = """
+You are a JSON repair engine for paraphraser settings.
+
+Convert the previous invalid extractor output into valid JSON only.
+
+Critical rule:
+- Do NOT include the full text/article/content.
+- Keep only small settings/options.
+
+Rules:
+- Return valid JSON only.
+- Do not explain.
+- Do not add markdown.
+- First character must be {.
+- Last character must be }.
+- Use null for missing fields.
+- Keep only these fields:
+  language, tone, rewrite_mode, change_level, results_count, extra_options
+
+Required JSON shape:
+{
+  "language": null,
+  "tone": null,
+  "rewrite_mode": null,
+  "change_level": null,
+  "results_count": null,
+  "extra_options": []
+}
+""".strip()
+
+
 MODEL_ROUTES: Dict[str, dict] = {
     "writer_pro": {
         "provider": "openrouter",
@@ -274,6 +374,12 @@ MODEL_ROUTES: Dict[str, dict] = {
         "provider": "openrouter",
         "model_env_key": "OPENROUTER_HEADLINE_MODEL",
         "temperature": 0.75,
+        "max_tokens": 500,
+    },
+    "paraphraser_extractor": {
+        "provider": "openrouter",
+        "model_env_key": "OPENROUTER_PARAPHRASER_EXTRACTOR_MODEL",
+        "temperature": 0.0,
         "max_tokens": 500,
     },
     "paraphraser_fast": {

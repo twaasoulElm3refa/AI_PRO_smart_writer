@@ -23,6 +23,13 @@ class Settings(BaseSettings):
     # Headline cost values per 1M tokens
     HEADLINE_INPUT_COST_PER_1M: float = 0.100
     HEADLINE_OUTPUT_COST_PER_1M: float = 0.500
+
+    # Paraphraser chat defaults
+    PARAPHRASER_MAX_CONTENT_CHARS: int = 12000
+
+    # Paraphraser cost values per 1M tokens
+    PARAPHRASER_INPUT_COST_PER_1M: float = 0.100
+    PARAPHRASER_OUTPUT_COST_PER_1M: float = 0.500
     
     # Use your real production DB here, for example:
     # mysql+pymysql://DB_USER:DB_PASSWORD@127.0.0.1:3306/DB_NAME?charset=utf8mb4
@@ -49,6 +56,7 @@ class Settings(BaseSettings):
     OPENROUTER_SUMMARIZER_MODEL: str         = "nvidia/nemotron-3-super-120b-a12b:free"
     OPENROUTER_HEADLINE_MODEL: str           = "nvidia/nemotron-3-super-120b-a12b:free"
     OPENROUTER_HEADLINE_EXTRACTOR_MODEL: str = "openai/gpt-oss-120b:free"
+    OPENROUTER_PARAPHRASER_EXTRACTOR_MODEL: str = "openai/gpt-oss-120b:free"
     OPENROUTER_PARAPHRASER_MODEL: str        = "nvidia/nemotron-3-super-120b-a12b:free"
     
 

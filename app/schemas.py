@@ -117,62 +117,13 @@ class TaskResponse(BaseModel):
     cost: Optional[CostUsage] = None
 
 
-HeadlineContentType = Literal[
-    "Article",
-    "News",
-    "YouTube Video",
-    "Social Media Post",
-    "Ad",
-    "Email Subject",
-    "Landing Page",
-    "Product",
-    "Report",
-    "Creative Text",
-    "General",
-]
-
-HeadlineGoal = Literal[
-    "Attract Attention",
-    "Explain Clearly",
-    "Increase Clicks",
-    "Sound Professional",
-    "Sound Creative",
-    "Improve SEO",
-    "Create Curiosity",
-    "Sell / Convert",
-    "Summarize Content",
-]
-
-HeadlineLanguage = Literal[
-    "Auto Detect",
-    "Arabic",
-    "English",
-    "French",
-    "Chinese",
-    "Russian",
-]
-
-HeadlineTone = Literal[
-    "Professional",
-    "Powerful",
-    "Simple",
-    "Creative",
-    "Emotional",
-    "Luxury",
-    "Bold",
-    "Informative",
-    "Journalistic",
-    "Academic",
-    "Marketing",
-    "Neutral",
-]
-
-HeadlineLength = Literal[
-    "Short",
-    "Medium",
-    "Long",
-    "Auto",
-]
+# These are examples for the UI/prompt, not strict backend enums.
+# Keep them as normal strings so the chat can accept any language, tone, goal, etc.
+HeadlineContentType = str
+HeadlineGoal = str
+HeadlineLanguage = str
+HeadlineTone = str
+HeadlineLength = str
 
 HeadlineChatType = Literal[
     "question",
@@ -198,15 +149,49 @@ class HeadlineState(BaseModel):
         v = str(v).strip()
         return v or None
 
-    @field_validator("number_of_headlines")
+    @field_validator("content_type", "goal", "language", "tone", "headline_length", mode="before")
     @classmethod
-    def validate_number_of_headlines(cls, v: Optional[int]) -> Optional[int]:
+    def normalize_optional_text_fields(cls, v):
         if v is None:
-            return v
-        allowed = {5, 10, 15, 20}
-        if int(v) not in allowed:
-            raise ValueError("number_of_headlines must be one of 5, 10, 15, 20")
-        return int(v)
+            return None
+        v = str(v).strip()
+        return v or None
+
+    @field_validator("number_of_headlines", mode="before")
+    @classmethod
+    def validate_number_of_headlines(cls, v) -> Optional[int]:
+        if v is None or v == "":
+            return None
+
+        try:
+            value = int(v)
+        except (TypeError, ValueError):
+            raise ValueError("number_of_headlines must be a positive integer")
+
+        if value < 1:
+            raise ValueError("number_of_headlines must be at least 1")
+
+        # Not restricted to fixed choices. This cap only protects cost/performance.
+        # Increase it if you want to allow larger batches.
+        if value > 100:
+            raise ValueError("number_of_headlines is too high; maximum is 100")
+
+        return value
+
+    @field_validator("extra_options", mode="before")
+    @classmethod
+    def normalize_extra_options(cls, v):
+        if v is None:
+            return []
+        if isinstance(v, list):
+            cleaned = []
+            for item in v:
+                item = str(item).strip()
+                if item and item not in cleaned:
+                    cleaned.append(item)
+            return cleaned
+        item = str(v).strip()
+        return [item] if item else []
 
 
 class HeadlineChatRequest(BaseModel):
@@ -253,6 +238,130 @@ class HeadlineChatResponse(BaseModel):
     message: str
     state: HeadlineState
     headlines: List[HeadlineItem] = Field(default_factory=list)
+    count: int = 0
+    request_id: str
+    debug: Optional[dict] = None
+    usage: Optional[TokenUsage] = None
+    cost: Optional[CostUsage] = None
+
+
+# These are examples for the UI/prompt, not strict backend enums.
+# Keep them as normal strings so the chat can accept any language, tone, mode, etc.
+ParaphraserLanguage = str
+ParaphraserTone = str
+ParaphraserRewriteMode = str
+ParaphraserChangeLevel = str
+
+ParaphraserChatType = Literal[
+    "question",
+    "result",
+]
+
+
+class ParaphraserState(BaseModel):
+    content: Optional[str] = None
+    language: Optional[ParaphraserLanguage] = "Auto Detect"
+    tone: Optional[ParaphraserTone] = "Professional"
+    rewrite_mode: Optional[ParaphraserRewriteMode] = "Paraphrase"
+    change_level: Optional[ParaphraserChangeLevel] = "Medium"
+    results_count: Optional[int] = 1
+    extra_options: List[str] = Field(default_factory=list)
+
+    @field_validator("content")
+    @classmethod
+    def validate_content(cls, v: Optional[str]) -> Optional[str]:
+        if v is None:
+            return v
+        v = str(v).strip()
+        return v or None
+
+    @field_validator("language", "tone", "rewrite_mode", "change_level", mode="before")
+    @classmethod
+    def normalize_optional_text_fields(cls, v):
+        if v is None:
+            return None
+        v = str(v).strip()
+        return v or None
+
+    @field_validator("results_count", mode="before")
+    @classmethod
+    def validate_results_count(cls, v) -> Optional[int]:
+        if v is None or v == "":
+            return None
+
+        try:
+            value = int(v)
+        except (TypeError, ValueError):
+            raise ValueError("results_count must be a positive integer")
+
+        if value < 1:
+            raise ValueError("results_count must be at least 1")
+
+        # Not restricted to fixed choices. This cap only protects cost/performance.
+        if value > 20:
+            raise ValueError("results_count is too high; maximum is 20")
+
+        return value
+
+    @field_validator("extra_options", mode="before")
+    @classmethod
+    def normalize_extra_options(cls, v):
+        if v is None:
+            return []
+        if isinstance(v, list):
+            cleaned = []
+            for item in v:
+                item = str(item).strip()
+                if item and item not in cleaned:
+                    cleaned.append(item)
+            return cleaned
+        item = str(v).strip()
+        return [item] if item else []
+
+
+class ParaphraserChatRequest(BaseModel):
+    user_id: int
+    sub_tool_id: int
+    conversation_uuid: str
+    user_message: str
+    state: Optional[ParaphraserState] = None
+    debug: bool = False
+    client_metadata: Dict[str, Any] = Field(default_factory=dict)
+
+    @field_validator("conversation_uuid")
+    @classmethod
+    def validate_uuid(cls, v: str) -> str:
+        v = v.strip()
+        if not v:
+            raise ValueError("conversation_uuid cannot be empty")
+        return v
+
+    @field_validator("user_message")
+    @classmethod
+    def validate_user_message(cls, v: str) -> str:
+        v = v.strip()
+        if not v:
+            raise ValueError("user_message cannot be empty")
+        return v
+
+
+class ParaphraserResultItem(BaseModel):
+    id: int
+    text: str
+
+
+class ParaphraserChatResponse(BaseModel):
+    success: bool = True
+    type: ParaphraserChatType
+    tool: str = "ai_paraphraser"
+    provider: str = "openrouter"
+    model_key: str = "paraphraser_fast"
+    user_id: int
+    sub_tool_id: int
+    conversation_uuid: str
+    message: str
+    state: ParaphraserState
+    results: List[ParaphraserResultItem] = Field(default_factory=list)
     count: int = 0
     request_id: str
     debug: Optional[dict] = None

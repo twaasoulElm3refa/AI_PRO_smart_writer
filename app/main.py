@@ -7,8 +7,17 @@ from sqlalchemy.orm import Session
 from app.settings import get_settings
 from app.crud import get_conversation_by_uuid_for_user, list_messages
 from app.database import get_db
-from app.schemas import TaskRequest, TaskResponse, MessageResponse, HeadlineChatRequest, HeadlineChatResponse
+from app.schemas import (
+    TaskRequest,
+    TaskResponse,
+    MessageResponse,
+    HeadlineChatRequest,
+    HeadlineChatResponse,
+    ParaphraserChatRequest,
+    ParaphraserChatResponse,
+)
 from app.headline_chat import run_headline_chat
+from app.paraphraser_chat import run_paraphraser_chat
 from app.services import run_task
 from app.tasks import TASKS
 from app.security import verify_internal_api_key
@@ -113,6 +122,28 @@ async def headline_generator_chat_endpoint(
 ) -> HeadlineChatResponse:
     try:
         return await run_headline_chat(db, req, request.state.request_id)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except httpx.HTTPStatusError as e:
+        provider_text = e.response.text if e.response is not None else str(e)
+        raise HTTPException(status_code=502, detail=f"Provider HTTP error: {provider_text}")
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=str(e))
+
+
+@app.post(
+    "/tasks/paraphraser/chat",
+    response_model=ParaphraserChatResponse,
+    tags=["tasks"],
+)
+async def paraphraser_chat_endpoint(
+    req: ParaphraserChatRequest,
+    request: Request,
+    db: Session = Depends(get_db),
+    _: None = Depends(verify_internal_api_key),
+) -> ParaphraserChatResponse:
+    try:
+        return await run_paraphraser_chat(db, req, request.state.request_id)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
     except httpx.HTTPStatusError as e:
