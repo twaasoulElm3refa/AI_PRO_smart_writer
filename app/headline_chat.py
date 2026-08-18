@@ -6,7 +6,10 @@ from typing import Any
 from sqlalchemy.orm import Session
 
 from app.crud import get_existing_conversation_for_task
-from app.providers import ProviderResult, send_messages_with_model
+from app.content_common import combine_usage, merge_extra_options, normalize_text
+from app.errors import ProviderOutputError
+from app.json_utils import extract_json_object, object_response_format
+from app.providers import send_messages_with_model
 from app.schemas import (
     ChatMessage,
     CostUsage,
@@ -14,7 +17,6 @@ from app.schemas import (
     HeadlineChatResponse,
     HeadlineItem,
     HeadlineState,
-    TokenUsage,
 )
 from app.settings import get_settings
 from app.tasks import (
@@ -121,13 +123,6 @@ def default_headline_state() -> HeadlineState:
     )
 
 
-def normalize_text(value: Any) -> str | None:
-    if value is None:
-        return None
-    value = str(value).strip()
-    return value or None
-
-
 def normalize_extracted_payload(payload: dict[str, Any]) -> dict[str, Any]:
     """
     Normalize the extractor JSON without enforcing fixed allowed values.
@@ -165,35 +160,6 @@ def normalize_extracted_payload(payload: dict[str, Any]) -> dict[str, Any]:
 
     return clean
 
-def extract_json_object(text: str) -> dict[str, Any]:
-    cleaned = (text or "").strip()
-
-    if cleaned.startswith("```"):
-        cleaned = re.sub(r"^```(?:json)?", "", cleaned.strip(), flags=re.IGNORECASE).strip()
-        cleaned = re.sub(r"```$", "", cleaned.strip()).strip()
-
-    try:
-        parsed = json.loads(cleaned)
-        if not isinstance(parsed, dict):
-            raise ValueError("Extractor JSON must be an object")
-        return parsed
-    except json.JSONDecodeError:
-        match = re.search(r"\{.*\}", cleaned, flags=re.DOTALL)
-        if not match:
-            raise ValueError(f"Extractor did not return valid JSON: {text}")
-        parsed = json.loads(match.group(0))
-        if not isinstance(parsed, dict):
-            raise ValueError("Extractor JSON must be an object")
-        return parsed
-
-
-def merge_extra_options(old_options: list[str], new_options: list[str] | None) -> list[str]:
-    merged: list[str] = []
-    for item in old_options + (new_options or []):
-        item = str(item).strip()
-        if item and item not in merged:
-            merged.append(item)
-    return merged
 
 
 def merge_headline_state(old_state: HeadlineState, extracted: dict[str, Any]) -> HeadlineState:
@@ -361,7 +327,7 @@ async def extract_headline_updates_with_retry(
         temperature_override=0.0,
         max_tokens_override=700,
         enable_web_search=False,
-        response_format={"type": "json_object"},
+        response_format=object_response_format("headline_extractor"),
     )
 
     try:
@@ -393,7 +359,7 @@ Return the corrected FULL updated JSON state only.
             temperature_override=0.0,
             max_tokens_override=700,
             enable_web_search=False,
-            response_format={"type": "json_object"},
+            response_format=object_response_format("headline_extractor"),
         )
 
         try:
@@ -404,12 +370,14 @@ Return the corrected FULL updated JSON state only.
                 "repaired": True,
             }
         except Exception as second_error:
-            raise ValueError(
+            raise ProviderOutputError(
                 "Extractor failed to return valid JSON after retry. "
                 f"First error: {first_error}. "
                 f"Second error: {second_error}. "
-                f"First raw output: {extractor_result.content}. "
-                f"Repair raw output: {repair_result.content}."
+                f"Extractor trace: {extractor_result.trace_id or 'n/a'} / "
+                f"{extractor_result.generation_id or 'n/a'}. "
+                f"Repair trace: {repair_result.trace_id or 'n/a'} / "
+                f"{repair_result.generation_id or 'n/a'}."
             )
 
 
@@ -520,18 +488,6 @@ def calculate_headline_cost(input_tokens: int | None, output_tokens: int | None)
     )
 
 
-def combine_usage(*items: ProviderResult) -> TokenUsage:
-    input_tokens = sum((item.input_tokens or 0) for item in items if item is not None)
-    output_tokens = sum((item.output_tokens or 0) for item in items if item is not None)
-    total_tokens = sum((item.total_tokens or 0) for item in items if item is not None)
-
-    return TokenUsage(
-        input_tokens=input_tokens,
-        output_tokens=output_tokens,
-        total_tokens=total_tokens or input_tokens + output_tokens,
-    )
-
-
 async def run_headline_chat(
     db: Session,
     req: HeadlineChatRequest,
@@ -574,6 +530,7 @@ async def run_headline_chat(
                 "phase": "question",
                 "extracted": extracted,
                 "extractor_raw": extractor_result.content,
+                "extractor_trace": extractor_result.trace_metadata(),
                 "repair": extractor_repair_debug,
                 "state": new_state.model_dump(),
                 "missing": get_missing_fields(new_state),
@@ -624,8 +581,10 @@ async def run_headline_chat(
             "phase": "result",
             "extracted": extracted,
             "extractor_raw": extractor_result.content,
+            "extractor_trace": extractor_result.trace_metadata(),
             "repair": extractor_repair_debug,
             "generator_raw": generator_result.content,
+            "generator_trace": generator_result.trace_metadata(),
             "state": new_state.model_dump(),
             "headlines_count": len(headlines),
         }

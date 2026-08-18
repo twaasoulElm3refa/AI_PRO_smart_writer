@@ -6,13 +6,14 @@ from app.settings import get_settings
 
 settings = get_settings()
 
-connect_args = {}
-if settings.DATABASE_URL.startswith("sqlite"):
-    connect_args = {"check_same_thread": False}
+if not settings.DATABASE_URL.strip():
+    raise RuntimeError("DATABASE_URL is required to start the API")
+
+if not settings.DATABASE_URL.lower().startswith(("mysql://", "mysql+pymysql://", "mariadb://", "mariadb+pymysql://")):
+    raise RuntimeError("DATABASE_URL must use the production MySQL/MariaDB database")
 
 engine = create_engine(
     settings.DATABASE_URL,
-    connect_args=connect_args,
     future=True,
     pool_pre_ping=True,
 )
